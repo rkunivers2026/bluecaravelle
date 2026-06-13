@@ -9,6 +9,10 @@ import {
 
 const router = Router();
 
+// Verrou anti-concurrence : empêche deux créations simultanées du super admin
+// (deux requêtes /auth/setup arrivant avant la première écriture).
+let setupLock = false;
+
 // Règles de robustesse du mot de passe (alignées sur le front).
 function passwordError(p) {
   if (!p || p.length < 8) return "Mot de passe : 8 caractères minimum.";
@@ -25,7 +29,7 @@ router.get("/auth/needs-setup", (req, res) => {
 
 /* ---- Création unique du super administrateur ---- */
 router.post("/auth/setup", async (req, res) => {
-  if (store.getSuperadmin()) {
+  if (store.getSuperadmin() || setupLock) {
     return res.status(409).json({ error: "Un super administrateur existe déjà." });
   }
   const user = String((req.body && req.body.user) || "").trim();
@@ -34,11 +38,17 @@ router.post("/auth/setup", async (req, res) => {
   const perr = passwordError(pass);
   if (perr) return res.status(400).json({ error: perr });
 
-  const passHash = await hashPassword(pass);
-  store.setSuperadmin({ user, passHash, nom: "RK Univers", date_creation: Date.now() });
-  // Connexion immédiate après création.
-  issueSession(res, { user, nom: "RK Univers", role: "superadmin" });
-  res.status(201).json({ user: { user, nom: "RK Univers", role: "superadmin" } });
+  setupLock = true;
+  try {
+    if (store.getSuperadmin()) return res.status(409).json({ error: "Un super administrateur existe déjà." });
+    const passHash = await hashPassword(pass);
+    store.setSuperadmin({ user, passHash, nom: "RK Univers", date_creation: Date.now() });
+    // Connexion immédiate après création.
+    issueSession(res, { user, nom: "RK Univers", role: "superadmin" });
+    res.status(201).json({ user: { user, nom: "RK Univers", role: "superadmin" } });
+  } finally {
+    setupLock = false;
+  }
 });
 
 /* ---- Connexion ---- */
